@@ -52,6 +52,7 @@ brew install libomp
 
 ## Running the Application
 
+### Main Predictor
 ```bash
 uv run main.py
 ```
@@ -62,6 +63,29 @@ This will:
 3. Train XGBoost model on 80% of historical data
 4. Backtest on 20% of data and display performance metrics
 5. Generate live prediction for next market move
+
+### Hyperparameter Tuning (Optional)
+
+To optimize the model's hyperparameters using Optuna:
+
+```bash
+# Quick tuning (20 trials)
+uv run tune.py --trials 20
+
+# Comprehensive tuning (100 trials, default)
+uv run tune.py --trials 100
+
+# Save best parameters to file
+uv run tune.py --trials 100 --save
+```
+
+The tuning script will:
+- Perform automated hyperparameter optimization
+- Use 5-fold cross-validation by default
+- Find optimal: n_estimators, max_depth, learning_rate, subsample, colsample_bytree, min_child_weight, gamma
+- Display best parameters and test accuracy
+
+After tuning, you can manually update the hardcoded hyperparameters in `main.py` with the optimized values.
 
 ## Output Example
 
