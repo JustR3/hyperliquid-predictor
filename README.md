@@ -52,6 +52,12 @@ brew install libomp
 
 ## Running the Application
 
+### Quick Start
+```bash
+# Run the complete pipeline
+uv run main.py
+```
+
 ### Main Predictor
 ```bash
 uv run main.py
@@ -66,26 +72,49 @@ This will:
 
 ### Hyperparameter Tuning (Optional)
 
-To optimize the model's hyperparameters using Optuna:
+To optimize the model's hyperparameters using Optuna's Bayesian optimization:
 
 ```bash
-# Quick tuning (20 trials)
+# Quick tuning (20 trials, ~1 minute)
 uv run tune.py --trials 20
 
-# Comprehensive tuning (100 trials, default)
+# Standard tuning (100 trials, ~6 minutes)
 uv run tune.py --trials 100
 
-# Save best parameters to file
+# Comprehensive tuning with custom CV folds
+uv run tune.py --trials 100 --folds 5
+
+# Save best parameters to file for reuse
 uv run tune.py --trials 100 --save
 ```
 
-The tuning script will:
-- Perform automated hyperparameter optimization
-- Use 5-fold cross-validation by default
-- Find optimal: n_estimators, max_depth, learning_rate, subsample, colsample_bytree, min_child_weight, gamma
-- Display best parameters and test accuracy
+**How tuning works:**
+- Uses Tree-structured Parzen Estimator (TPE) - a Bayesian optimization algorithm
+- Intelligently explores hyperparameter space, learning from each trial
+- Focuses computational budget on promising regions
+- ~50-100x faster than random or grid search
+- Optimizes: n_estimators, max_depth, learning_rate, subsample, colsample_bytree, min_child_weight, gamma
 
-After tuning, you can manually update the hardcoded hyperparameters in `main.py` with the optimized values.
+**Using tuned parameters:**
+After running `tune.py --save`, a `best_hyperparameters.json` file is created. You can then:
+1. Copy the parameters from the JSON file
+2. Update the model creation in `main.py` with the optimized values
+3. Re-run `main.py` with the new parameters
+
+### Typical Workflow
+
+```bash
+# 1. Initial exploration
+uv run main.py  # See current performance
+
+# 2. Optimize model
+uv run tune.py --trials 50 --save
+
+# 3. Update main.py with best_hyperparameters.json values
+
+# 4. Evaluate improved model
+uv run main.py  # See improved backtest results
+```
 
 ## Output Example
 
@@ -131,13 +160,41 @@ Binary classification: 1 if next 7-day return > 5%, else 0
 - Learning Rate: 0.05
 - Subsample: 0.8
 
+## Backtest Explanation
+
+The backtest simulates real trading to evaluate strategy performance:
+
+**How it works:**
+1. **Training (80% of data)**: Model learns patterns from 80 days of data
+2. **Testing (20% of data)**: Model makes predictions on unseen 20 days
+3. **Trade Simulation**: 
+   - **Entry**: When model predicts 1 (expects >5% move up)
+   - **Position Size**: 10% of available capital per trade
+   - **Fees**: 5 basis points on entry and exit
+   - **Exit**: When model predicts 0 or at end of period
+
+**Metrics calculated:**
+- **Total Return %**: Final equity vs initial capital
+- **Total P&L**: Actual dollar profit/loss
+- **Win Rate**: % of trades that were profitable
+- **Profit Factor**: Winning trade value / Losing trade value
+- **Sharpe Ratio**: Risk-adjusted returns (higher = better)
+- **Max Drawdown %**: Largest peak-to-trough decline
+
+**Important notes:**
+- Uses chronological split (not random) - tests on future data
+- Includes realistic trading fees
+- Tracks equity curve for drawdown analysis
+- Results show historical performance only - not guaranteed future results
+
 ## Backtest Parameters
 
 - **Initial Capital**: $10,000
 - **Position Size**: 10% of capital per trade
-- **Trading Fee**: 5 basis points (0.05%)
-- **Entry Signal**: Model prediction = 1
-- **Exit Signal**: Model prediction = 0 or end of test period
+- **Trading Fee**: 5 basis points (0.05%) on entry and exit
+- **Entry Signal**: Model prediction = 1 (bullish)
+- **Exit Signal**: Model prediction = 0 (bearish) or end of test period
+- **Data Split**: 80% training, 20% testing (chronological order)
 
 ## Key Metrics
 
@@ -153,18 +210,46 @@ Binary classification: 1 if next 7-day return > 5%, else 0
 
 ```
 hyperliquid-predictor/
-├── main.py           # Main application
-├── pyproject.toml    # Project dependencies (UV)
-└── README.md         # This file
+├── main.py                    # Main application - data fetching, training, backtesting, predictions
+├── tune.py                    # CLI tool for hyperparameter tuning via Optuna
+├── hyperparameter_tuning.py   # Reusable module for Bayesian hyperparameter optimization
+├── pyproject.toml             # Project dependencies (UV)
+├── uv.lock                    # Locked dependency versions
+├── README.md                  # This file
+└── .gitignore                 # Git ignore rules
 ```
+
+## File Descriptions
+
+- **main.py** (226 lines)
+  - Fetches 200 days of OHLCV data from Hyperliquid
+  - Computes technical indicators (RSI, volume change)
+  - Trains XGBoost classifier on historical data
+  - Runs comprehensive backtest with P&L simulation
+  - Generates real-time predictions
+  - Reports detailed backtest metrics
+
+- **tune.py** (128 lines)
+  - CLI interface for hyperparameter optimization
+  - Uses Optuna's Bayesian optimization (TPE sampler)
+  - Configurable trials and cross-validation folds
+  - Optional parameter export to JSON
+  - Full accuracy reporting and best parameter display
+
+- **hyperparameter_tuning.py** (104 lines)
+  - Core optimization logic with Optuna integration
+  - Objective function for cross-validation scoring
+  - Model training with optimized parameters
+  - Reusable for future ML experiments
 
 ## Dependencies
 
-- **ccxt**: Cryptocurrency exchange APIs
-- **pandas**: Data manipulation and analysis
-- **numpy**: Numerical computing
-- **xgboost**: Gradient boosting machine learning
-- **scikit-learn**: Machine learning utilities
+- **ccxt** ≥4.0.0: Cryptocurrency exchange APIs
+- **pandas** ≥2.0.0: Data manipulation and analysis
+- **numpy** ≥1.24.0: Numerical computing
+- **xgboost** ≥2.0.0: Gradient boosting machine learning
+- **scikit-learn** ≥1.3.0: Cross-validation and metrics
+- **optuna** ≥3.0.0: Bayesian hyperparameter optimization
 
 ## Disclaimer
 
@@ -173,13 +258,19 @@ This is an educational project for learning purposes. Cryptocurrency trading car
 ## Future Enhancements
 
 - [ ] Real-time trading integration with Hyperliquid API
-- [ ] Risk management features (stop-loss, take-profit)
-- [ ] Additional technical indicators (MACD, Bollinger Bands)
-- [ ] Hyperparameter optimization
-- [ ] Walk-forward backtesting
-- [ ] Multi-timeframe analysis
-- [ ] Sentiment analysis integration
-- [ ] Portfolio optimization across multiple assets
+- [ ] Risk management features (stop-loss, take-profit levels)
+- [ ] Position sizing based on volatility (Kelly Criterion, ATR-based)
+- [ ] Additional technical indicators (MACD, Bollinger Bands, Volume Profile)
+- [ ] Walk-forward backtesting for more realistic evaluation
+- [ ] Multi-timeframe analysis (1h, 4h, 1d)
+- [ ] Ensemble methods combining multiple models
+- [ ] Feature importance analysis and visualization
+- [ ] Sentiment/macro data integration
+- [ ] Trade history export (CSV/JSON)
+- [ ] Equity curve visualization
+- [ ] Monthly/weekly P&L reporting
+- [ ] Model performance metrics (precision, recall, F1-score)
+- [ ] Correlation analysis with other assets
 
 ## License
 
