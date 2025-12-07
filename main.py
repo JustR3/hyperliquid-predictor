@@ -1,0 +1,227 @@
+import ccxt
+import pandas as pd
+import numpy as np
+from xgboost import XGBClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+
+
+def compute_rsi(prices, period=14):
+    """Calculate RSI (Relative Strength Index)"""
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+
+def backtest_strategy(df_test, model, initial_capital=10000, position_size_pct=0.1, trading_fee_bps=5):
+    """
+    Backtest the trading strategy with proper P&L calculation.
+    
+    Args:
+        df_test: Test dataframe with features and actual close prices
+        model: Trained XGBoost model
+        initial_capital: Starting capital in USD
+        position_size_pct: Percentage of capital to risk per trade (0.1 = 10%)
+        trading_fee_bps: Trading fee in basis points (5 bps = 0.05%)
+    
+    Returns:
+        Dictionary with backtest metrics
+    """
+    df_test = df_test.copy()
+    
+    # Generate predictions and probabilities
+    X_test = df_test[['rsi', 'vol_change', 'macro_score', 'unlock_pressure']]
+    df_test['prediction'] = model.predict(X_test)
+    df_test['prob_up'] = model.predict_proba(X_test)[:, 1]
+    
+    # Initialize tracking variables
+    capital = initial_capital
+    position = 0  # 0 = no position, 1 = long
+    entry_price = 0
+    entry_prob = 0
+    position_size = 0
+    trades = []
+    equity_curve = [capital]
+    
+    fee_rate = trading_fee_bps / 10000
+    
+    # Walk through test set
+    for i in range(len(df_test)):
+        current_price = df_test['close'].iloc[i]
+        
+        # Entry signal: prediction = 1 (expecting up move)
+        if position == 0 and df_test['prediction'].iloc[i] == 1:
+            position = 1
+            entry_price = current_price
+            entry_prob = df_test['prob_up'].iloc[i]
+            position_size = (capital * position_size_pct) / current_price
+            # Apply entry fee
+            capital -= position_size * entry_price * fee_rate
+        
+        # Exit signal: prediction = 0 OR we're at the 7-day target horizon
+        elif position == 1 and (df_test['prediction'].iloc[i] == 0 or i == len(df_test) - 1):
+            exit_price = current_price
+            position_value = position_size * exit_price
+            # Apply exit fee
+            position_value -= position_size * exit_price * fee_rate
+            
+            # Calculate P&L
+            pnl = position_value - (position_size * entry_price)
+            pnl_pct = (exit_price - entry_price) / entry_price - 2 * fee_rate
+            
+            capital += position_value
+            
+            trades.append({
+                'entry_idx': i - 1,
+                'exit_idx': i,
+                'entry_price': entry_price,
+                'exit_price': exit_price,
+                'pnl': pnl,
+                'pnl_pct': pnl_pct,
+                'position_size': position_size,
+                'entry_prob': entry_prob
+            })
+            
+            position = 0
+        
+        # Track equity
+        if position == 0:
+            equity_curve.append(capital)
+        else:
+            # Unrealized P&L
+            unrealized = (current_price - entry_price) / entry_price - 2 * fee_rate
+            equity_curve.append(capital * (1 + (unrealized * position_size_pct)))
+    
+    # Calculate metrics
+    equity_curve = np.array(equity_curve)
+    total_return = (equity_curve[-1] - initial_capital) / initial_capital
+    
+    trades_df = pd.DataFrame(trades) if len(trades) > 0 else pd.DataFrame()
+    
+    if len(trades_df) > 0:
+        winning_trades = len(trades_df[trades_df['pnl'] > 0])
+        losing_trades = len(trades_df[trades_df['pnl'] <= 0])
+        win_rate = winning_trades / len(trades_df)
+        avg_win = trades_df[trades_df['pnl'] > 0]['pnl'].mean() if winning_trades > 0 else 0
+        avg_loss = trades_df[trades_df['pnl'] <= 0]['pnl'].mean() if losing_trades > 0 else 0
+        total_pnl = trades_df['pnl'].sum()
+        profit_factor = abs(trades_df[trades_df['pnl'] > 0]['pnl'].sum() / trades_df[trades_df['pnl'] < 0]['pnl'].sum()) if losing_trades > 0 else float('inf')
+    else:
+        winning_trades = losing_trades = win_rate = avg_win = avg_loss = total_pnl = 0
+        profit_factor = 0
+    
+    # Calculate Sharpe Ratio (assuming daily returns)
+    daily_returns = np.diff(equity_curve) / equity_curve[:-1]
+    sharpe_ratio = np.mean(daily_returns) / (np.std(daily_returns) + 1e-6) * np.sqrt(252) if len(daily_returns) > 1 else 0
+    
+    # Calculate Max Drawdown
+    cummax = np.maximum.accumulate(equity_curve)
+    drawdown = (equity_curve - cummax) / cummax
+    max_drawdown = np.min(drawdown)
+    
+    return {
+        'final_equity': equity_curve[-1],
+        'total_return_pct': total_return * 100,
+        'total_pnl': total_pnl,
+        'num_trades': len(trades_df),
+        'winning_trades': winning_trades,
+        'losing_trades': losing_trades,
+        'win_rate_pct': win_rate * 100,
+        'avg_win': avg_win,
+        'avg_loss': avg_loss,
+        'profit_factor': profit_factor,
+        'sharpe_ratio': sharpe_ratio,
+        'max_drawdown_pct': max_drawdown * 100,
+        'trades': trades_df
+    }
+
+
+# Real-time HYPE/USDT data from Hyperliquid via CCXT
+exchange = ccxt.hyperliquid()
+ohlcv = exchange.fetch_ohlcv('HYPE/USDT', '1d', limit=200)
+df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+
+# Features
+df['rsi'] = compute_rsi(df['close'], 14)
+df['vol_change'] = df['volume'].pct_change().fillna(0)
+df['price_change'] = df['close'].pct_change().shift(-1)  # Next day return
+
+# Manual inputs (updated Dec 7, 2025)
+df['macro_score'] = 0.6      # Fed paused, inflation sticky
+df['unlock_pressure'] = 0.15 # Post-Nov cliff absorbed
+
+# Target: 1 if next 7-day return >5%, else 0
+df['target'] = (df['close'].pct_change(7).shift(-7) > 0.05).astype(int)
+
+# Drop NaNAs
+df = df.dropna()
+
+# Features for model
+X = df[['rsi', 'vol_change', 'macro_score', 'unlock_pressure']]
+y = df['target']
+
+# Train-test split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+
+# XGBoost model
+model = XGBClassifier(
+    n_estimators=200,
+    max_depth=4,
+    learning_rate=0.05,
+    subsample=0.8,
+    random_state=42
+)
+model.fit(X_train, y_train)
+
+# Get test data with original indices preserved
+X_test_with_idx = X_test.copy()
+y_test_with_idx = y_test.copy()
+df_test = df.loc[X_test.index].copy()
+
+# Run comprehensive backtest
+backtest_results = backtest_strategy(
+    df_test,
+    model,
+    initial_capital=10000,
+    position_size_pct=0.1,
+    trading_fee_bps=5
+)
+
+# Print backtest results
+print("\n" + "="*50)
+print("BACKTEST RESULTS")
+print("="*50)
+print(f"Initial Capital: $10,000")
+print(f"Final Equity: ${backtest_results['final_equity']:.2f}")
+print(f"Total Return: {backtest_results['total_return_pct']:.2f}%")
+print(f"Total P&L: ${backtest_results['total_pnl']:.2f}")
+print()
+print(f"Number of Trades: {backtest_results['num_trades']}")
+print(f"Winning Trades: {backtest_results['winning_trades']}")
+print(f"Losing Trades: {backtest_results['losing_trades']}")
+print(f"Win Rate: {backtest_results['win_rate_pct']:.1f}%")
+print()
+print(f"Avg Win: ${backtest_results['avg_win']:.2f}")
+print(f"Avg Loss: ${backtest_results['avg_loss']:.2f}")
+print(f"Profit Factor: {backtest_results['profit_factor']:.2f}x")
+print()
+print(f"Sharpe Ratio: {backtest_results['sharpe_ratio']:.2f}")
+print(f"Max Drawdown: {backtest_results['max_drawdown_pct']:.2f}%")
+print("="*50)
+print()
+
+
+# Current real-time prediction - use latest values from data
+current = pd.DataFrame([{
+    'rsi': df['rsi'].iloc[-1],
+    'vol_change': df['vol_change'].iloc[-1],
+    'macro_score': 0.6,      # Keep manual inputs if needed
+    'unlock_pressure': 0.15
+}])
+
+prob_up = model.predict_proba(current)[0][1]
+print(f"Probability of >5% move up in next 1-4 weeks: {prob_up:.1%}")
