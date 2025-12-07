@@ -1,9 +1,8 @@
 import ccxt
-import pandas as pd
 import numpy as np
-from xgboost import XGBClassifier
+import pandas as pd
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+from xgboost import XGBClassifier
 
 
 def compute_rsi(prices, period=14):
@@ -16,7 +15,13 @@ def compute_rsi(prices, period=14):
     return rsi
 
 
-def backtest_strategy(df_test, model, initial_capital=10000, position_size_pct=0.1, trading_fee_bps=5):
+def backtest_strategy(
+    df_test,
+    model,
+    initial_capital=10000,
+    position_size_pct=0.1,
+    trading_fee_bps=5,
+):
     """
     Backtest the trading strategy with proper P&L calculation.
     
@@ -31,12 +36,12 @@ def backtest_strategy(df_test, model, initial_capital=10000, position_size_pct=0
         Dictionary with backtest metrics
     """
     df_test = df_test.copy()
-    
+
     # Generate predictions and probabilities
     X_test = df_test[['rsi', 'vol_change', 'macro_score', 'unlock_pressure']]
     df_test['prediction'] = model.predict(X_test)
     df_test['prob_up'] = model.predict_proba(X_test)[:, 1]
-    
+
     # Initialize tracking variables
     capital = initial_capital
     position = 0  # 0 = no position, 1 = long
@@ -45,13 +50,13 @@ def backtest_strategy(df_test, model, initial_capital=10000, position_size_pct=0
     position_size = 0
     trades = []
     equity_curve = [capital]
-    
+
     fee_rate = trading_fee_bps / 10000
-    
+
     # Walk through test set
     for i in range(len(df_test)):
         current_price = df_test['close'].iloc[i]
-        
+
         # Entry signal: prediction = 1 (expecting up move)
         if position == 0 and df_test['prediction'].iloc[i] == 1:
             position = 1
@@ -60,20 +65,20 @@ def backtest_strategy(df_test, model, initial_capital=10000, position_size_pct=0
             position_size = (capital * position_size_pct) / current_price
             # Apply entry fee
             capital -= position_size * entry_price * fee_rate
-        
+
         # Exit signal: prediction = 0 OR we're at the 7-day target horizon
         elif position == 1 and (df_test['prediction'].iloc[i] == 0 or i == len(df_test) - 1):
             exit_price = current_price
             position_value = position_size * exit_price
             # Apply exit fee
             position_value -= position_size * exit_price * fee_rate
-            
+
             # Calculate P&L
             pnl = position_value - (position_size * entry_price)
             pnl_pct = (exit_price - entry_price) / entry_price - 2 * fee_rate
-            
+
             capital += position_value
-            
+
             trades.append({
                 'entry_idx': i - 1,
                 'exit_idx': i,
@@ -84,9 +89,9 @@ def backtest_strategy(df_test, model, initial_capital=10000, position_size_pct=0
                 'position_size': position_size,
                 'entry_prob': entry_prob
             })
-            
+
             position = 0
-        
+
         # Track equity
         if position == 0:
             equity_curve.append(capital)
@@ -94,13 +99,13 @@ def backtest_strategy(df_test, model, initial_capital=10000, position_size_pct=0
             # Unrealized P&L
             unrealized = (current_price - entry_price) / entry_price - 2 * fee_rate
             equity_curve.append(capital * (1 + (unrealized * position_size_pct)))
-    
+
     # Calculate metrics
     equity_curve = np.array(equity_curve)
     total_return = (equity_curve[-1] - initial_capital) / initial_capital
-    
+
     trades_df = pd.DataFrame(trades) if len(trades) > 0 else pd.DataFrame()
-    
+
     if len(trades_df) > 0:
         winning_trades = len(trades_df[trades_df['pnl'] > 0])
         losing_trades = len(trades_df[trades_df['pnl'] <= 0])
@@ -108,20 +113,31 @@ def backtest_strategy(df_test, model, initial_capital=10000, position_size_pct=0
         avg_win = trades_df[trades_df['pnl'] > 0]['pnl'].mean() if winning_trades > 0 else 0
         avg_loss = trades_df[trades_df['pnl'] <= 0]['pnl'].mean() if losing_trades > 0 else 0
         total_pnl = trades_df['pnl'].sum()
-        profit_factor = abs(trades_df[trades_df['pnl'] > 0]['pnl'].sum() / trades_df[trades_df['pnl'] < 0]['pnl'].sum()) if losing_trades > 0 else float('inf')
+        profit_factor = (
+            abs(
+                trades_df[trades_df["pnl"] > 0]["pnl"].sum()
+                / trades_df[trades_df["pnl"] < 0]["pnl"].sum()
+            )
+            if losing_trades > 0
+            else float("inf")
+        )
     else:
         winning_trades = losing_trades = win_rate = avg_win = avg_loss = total_pnl = 0
         profit_factor = 0
-    
+
     # Calculate Sharpe Ratio (assuming daily returns)
     daily_returns = np.diff(equity_curve) / equity_curve[:-1]
-    sharpe_ratio = np.mean(daily_returns) / (np.std(daily_returns) + 1e-6) * np.sqrt(252) if len(daily_returns) > 1 else 0
-    
+    sharpe_ratio = (
+        np.mean(daily_returns) / (np.std(daily_returns) + 1e-6) * np.sqrt(252)
+        if len(daily_returns) > 1
+        else 0
+    )
+
     # Calculate Max Drawdown
     cummax = np.maximum.accumulate(equity_curve)
     drawdown = (equity_curve - cummax) / cummax
     max_drawdown = np.min(drawdown)
-    
+
     return {
         'final_equity': equity_curve[-1],
         'total_return_pct': total_return * 100,
@@ -195,7 +211,7 @@ backtest_results = backtest_strategy(
 print("\n" + "="*50)
 print("BACKTEST RESULTS")
 print("="*50)
-print(f"Initial Capital: $10,000")
+print("Initial Capital: $10,000")
 print(f"Final Equity: ${backtest_results['final_equity']:.2f}")
 print(f"Total Return: {backtest_results['total_return_pct']:.2f}%")
 print(f"Total P&L: ${backtest_results['total_pnl']:.2f}")

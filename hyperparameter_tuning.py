@@ -7,10 +7,8 @@ This module uses Optuna for efficient hyperparameter search.
 import optuna
 from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
-from xgboost import XGBClassifier
 from sklearn.model_selection import cross_val_score
-import pandas as pd
-import numpy as np
+from xgboost import XGBClassifier
 
 
 def objective(trial, X_train, y_train, n_splits=5):
@@ -36,10 +34,10 @@ def objective(trial, X_train, y_train, n_splits=5):
         'gamma': trial.suggest_float('gamma', 0, 5),
         'random_state': 42,
     }
-    
+
     model = XGBClassifier(**params)
     scores = cross_val_score(model, X_train, y_train, cv=n_splits, scoring='accuracy')
-    
+
     return scores.mean()
 
 
@@ -59,31 +57,31 @@ def tune_hyperparameters(X_train, y_train, n_trials=100, n_splits=5, verbose=Tru
     """
     sampler = TPESampler(seed=42)
     pruner = MedianPruner(n_warmup_steps=10)
-    
+
     study = optuna.create_study(
         direction='maximize',
         sampler=sampler,
         pruner=pruner
     )
-    
+
     # Disable Optuna logging if not verbose
     optuna_logger = optuna.logging.get_logger('optuna')
     if not verbose:
         optuna_logger.setLevel(optuna.logging.WARNING)
-    
+
     study.optimize(
         lambda trial: objective(trial, X_train, y_train, n_splits),
         n_trials=n_trials,
         show_progress_bar=verbose
     )
-    
+
     if verbose:
-        print(f"\nOptimization complete!")
+        print("\nOptimization complete!")
         print(f"Best accuracy: {study.best_value:.4f}")
-        print(f"\nBest hyperparameters:")
+        print("\nBest hyperparameters:")
         for key, value in study.best_params.items():
             print(f"  {key}: {value}")
-    
+
     return study.best_params
 
 

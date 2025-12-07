@@ -50,3 +50,6 @@ venv.bak/
 # Environment variables
 .env
 .env.local
+
+# Ruff cache
+.ruff_cache/
