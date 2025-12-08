@@ -123,24 +123,25 @@ uv run main.py  # See improved backtest results
 BACKTEST RESULTS
 ==================================================
 Initial Capital: $10,000
-Final Equity: $13,235.48
+Final Equity: $13235.48
 Total Return: 32.35%
-Total P&L: $-58.37
+Total P&L (net): $3235.48
+Total Fees Paid: $3.27
 
 Number of Trades: 3
 Winning Trades: 1
 Losing Trades: 2
 Win Rate: 33.3%
 
-Avg Win: $76.91
-Avg Loss: $-67.64
-Profit Factor: 0.57x
+Avg Win: $76.31
+Avg Loss: $-68.17
+Profit Factor: 0.56x
 
 Sharpe Ratio: 6.29
 Max Drawdown: -2.17%
 ==================================================
 
-Probability of >5% move up in next 1-4 weeks: 17.5%
+Probability of >5% move up in next 1-4 weeks: 42.1%
 ```
 
 ## Model Architecture
@@ -175,7 +176,8 @@ The backtest simulates real trading to evaluate strategy performance:
 
 **Metrics calculated:**
 - **Total Return %**: Final equity vs initial capital
-- **Total P&L**: Actual dollar profit/loss
+- **Total P&L (net)**: Total profit/loss after all fees (= Final Equity - Initial Capital)
+- **Total Fees Paid**: Trading fees deducted from capital
 - **Win Rate**: % of trades that were profitable
 - **Profit Factor**: Winning trade value / Losing trade value
 - **Sharpe Ratio**: Risk-adjusted returns (higher = better)
@@ -200,11 +202,14 @@ The backtest simulates real trading to evaluate strategy performance:
 
 | Metric | Description |
 |--------|-------------|
-| **Total Return** | Overall profit/loss percentage |
-| **Win Rate** | % of trades that were profitable |
-| **Profit Factor** | Ratio of winning trades to losing trades |
-| **Sharpe Ratio** | Risk-adjusted return (higher is better) |
-| **Max Drawdown** | Largest peak-to-trough decline |
+| **Total Return %** | Overall profit/loss as percentage of initial capital |
+| **Total P&L (net)** | Actual dollar profit/loss after all fees |
+| **Total Fees Paid** | Trading fees deducted from positions |
+| **Win Rate** | % of closed trades that were profitable |
+| **Avg Win / Avg Loss** | Average profit and loss per winning/losing trade |
+| **Profit Factor** | Ratio of total winning trades to losing trades (>1 is profitable) |
+| **Sharpe Ratio** | Risk-adjusted return (higher is better, >1 is good) |
+| **Max Drawdown %** | Largest peak-to-trough decline during backtest |
 
 ## Project Structure
 
