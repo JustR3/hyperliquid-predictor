@@ -24,23 +24,23 @@ def backtest_strategy(
 ):
     """
     Backtest the trading strategy with proper P&L calculation.
-    
+
     Args:
         df_test: Test dataframe with features and actual close prices
         model: Trained XGBoost model
         initial_capital: Starting capital in USD
         position_size_pct: Percentage of capital to risk per trade (0.1 = 10%)
         trading_fee_bps: Trading fee in basis points (5 bps = 0.05%)
-    
+
     Returns:
         Dictionary with backtest metrics
     """
     df_test = df_test.copy()
 
     # Generate predictions and probabilities
-    X_test = df_test[['rsi', 'vol_change', 'macro_score', 'unlock_pressure']]
-    df_test['prediction'] = model.predict(X_test)
-    df_test['prob_up'] = model.predict_proba(X_test)[:, 1]
+    X_test = df_test[["rsi", "vol_change", "macro_score", "unlock_pressure"]]
+    df_test["prediction"] = model.predict(X_test)
+    df_test["prob_up"] = model.predict_proba(X_test)[:, 1]
 
     # Initialize tracking variables
     capital = initial_capital
@@ -50,45 +50,54 @@ def backtest_strategy(
     position_size = 0
     trades = []
     equity_curve = [capital]
+    total_fees = 0
 
     fee_rate = trading_fee_bps / 10000
 
     # Walk through test set
     for i in range(len(df_test)):
-        current_price = df_test['close'].iloc[i]
+        current_price = df_test["close"].iloc[i]
 
         # Entry signal: prediction = 1 (expecting up move)
-        if position == 0 and df_test['prediction'].iloc[i] == 1:
+        if position == 0 and df_test["prediction"].iloc[i] == 1:
             position = 1
             entry_price = current_price
-            entry_prob = df_test['prob_up'].iloc[i]
+            entry_prob = df_test["prob_up"].iloc[i]
             position_size = (capital * position_size_pct) / current_price
-            # Apply entry fee
-            capital -= position_size * entry_price * fee_rate
+            # Calculate entry fee
+            entry_fee = position_size * entry_price * fee_rate
+            total_fees += entry_fee
+            capital -= entry_fee
 
         # Exit signal: prediction = 0 OR we're at the 7-day target horizon
-        elif position == 1 and (df_test['prediction'].iloc[i] == 0 or i == len(df_test) - 1):
+        elif position == 1 and (df_test["prediction"].iloc[i] == 0 or i == len(df_test) - 1):
             exit_price = current_price
             position_value = position_size * exit_price
-            # Apply exit fee
-            position_value -= position_size * exit_price * fee_rate
+            # Calculate exit fee
+            exit_fee = position_size * exit_price * fee_rate
+            total_fees += exit_fee
+            position_value -= exit_fee
 
-            # Calculate P&L
-            pnl = position_value - (position_size * entry_price)
-            pnl_pct = (exit_price - entry_price) / entry_price - 2 * fee_rate
+            # Calculate P&L (gross of fees)
+            gross_pnl = position_size * (exit_price - entry_price)
+            # Net P&L (after fees)
+            net_pnl = gross_pnl - (entry_fee + exit_fee)
 
             capital += position_value
 
-            trades.append({
-                'entry_idx': i - 1,
-                'exit_idx': i,
-                'entry_price': entry_price,
-                'exit_price': exit_price,
-                'pnl': pnl,
-                'pnl_pct': pnl_pct,
-                'position_size': position_size,
-                'entry_prob': entry_prob
-            })
+            trades.append(
+                {
+                    "entry_idx": i - 1,
+                    "exit_idx": i,
+                    "entry_price": entry_price,
+                    "exit_price": exit_price,
+                    "gross_pnl": gross_pnl,
+                    "net_pnl": net_pnl,
+                    "fees": entry_fee + exit_fee,
+                    "position_size": position_size,
+                    "entry_prob": entry_prob,
+                }
+            )
 
             position = 0
 
@@ -107,23 +116,31 @@ def backtest_strategy(
     trades_df = pd.DataFrame(trades) if len(trades) > 0 else pd.DataFrame()
 
     if len(trades_df) > 0:
-        winning_trades = len(trades_df[trades_df['pnl'] > 0])
-        losing_trades = len(trades_df[trades_df['pnl'] <= 0])
+        winning_trades = len(trades_df[trades_df["net_pnl"] > 0])
+        losing_trades = len(trades_df[trades_df["net_pnl"] <= 0])
         win_rate = winning_trades / len(trades_df)
-        avg_win = trades_df[trades_df['pnl'] > 0]['pnl'].mean() if winning_trades > 0 else 0
-        avg_loss = trades_df[trades_df['pnl'] <= 0]['pnl'].mean() if losing_trades > 0 else 0
-        total_pnl = trades_df['pnl'].sum()
+        avg_win = trades_df[trades_df["net_pnl"] > 0]["net_pnl"].mean() if winning_trades > 0 else 0
+        avg_loss = (
+            trades_df[trades_df["net_pnl"] <= 0]["net_pnl"].mean() if losing_trades > 0 else 0
+        )
+        closed_trades_pnl = trades_df["net_pnl"].sum()
+        total_fees_paid = trades_df["fees"].sum()
         profit_factor = (
             abs(
-                trades_df[trades_df["pnl"] > 0]["pnl"].sum()
-                / trades_df[trades_df["pnl"] < 0]["pnl"].sum()
+                trades_df[trades_df["net_pnl"] > 0]["net_pnl"].sum()
+                / trades_df[trades_df["net_pnl"] < 0]["net_pnl"].sum()
             )
             if losing_trades > 0
             else float("inf")
         )
     else:
-        winning_trades = losing_trades = win_rate = avg_win = avg_loss = total_pnl = 0
+        winning_trades = losing_trades = win_rate = avg_win = avg_loss = closed_trades_pnl = 0
+        total_fees_paid = 0
         profit_factor = 0
+
+    # Total P&L equals final equity minus initial capital
+    # This accounts for all trades, fees, and cash remaining
+    total_pnl = equity_curve[-1] - initial_capital
 
     # Calculate Sharpe Ratio (assuming daily returns)
     daily_returns = np.diff(equity_curve) / equity_curve[:-1]
@@ -139,57 +156,54 @@ def backtest_strategy(
     max_drawdown = np.min(drawdown)
 
     return {
-        'final_equity': equity_curve[-1],
-        'total_return_pct': total_return * 100,
-        'total_pnl': total_pnl,
-        'num_trades': len(trades_df),
-        'winning_trades': winning_trades,
-        'losing_trades': losing_trades,
-        'win_rate_pct': win_rate * 100,
-        'avg_win': avg_win,
-        'avg_loss': avg_loss,
-        'profit_factor': profit_factor,
-        'sharpe_ratio': sharpe_ratio,
-        'max_drawdown_pct': max_drawdown * 100,
-        'trades': trades_df
+        "final_equity": equity_curve[-1],
+        "total_return_pct": total_return * 100,
+        "total_pnl": total_pnl,
+        "total_fees": total_fees_paid,
+        "num_trades": len(trades_df),
+        "winning_trades": winning_trades,
+        "losing_trades": losing_trades,
+        "win_rate_pct": win_rate * 100,
+        "avg_win": avg_win,
+        "avg_loss": avg_loss,
+        "profit_factor": profit_factor,
+        "sharpe_ratio": sharpe_ratio,
+        "max_drawdown_pct": max_drawdown * 100,
+        "trades": trades_df,
     }
 
 
 # Real-time HYPE/USDT data from Hyperliquid via CCXT
 exchange = ccxt.hyperliquid()
-ohlcv = exchange.fetch_ohlcv('HYPE/USDT', '1d', limit=200)
-df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+ohlcv = exchange.fetch_ohlcv("HYPE/USDT", "1d", limit=200)
+df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
 
 # Features
-df['rsi'] = compute_rsi(df['close'], 14)
-df['vol_change'] = df['volume'].pct_change().fillna(0)
-df['price_change'] = df['close'].pct_change().shift(-1)  # Next day return
+df["rsi"] = compute_rsi(df["close"], 14)
+df["vol_change"] = df["volume"].pct_change().fillna(0)
+df["price_change"] = df["close"].pct_change().shift(-1)  # Next day return
 
 # Manual inputs (updated Dec 7, 2025)
-df['macro_score'] = 0.6      # Fed paused, inflation sticky
-df['unlock_pressure'] = 0.15 # Post-Nov cliff absorbed
+df["macro_score"] = 0.6  # Fed paused, inflation sticky
+df["unlock_pressure"] = 0.15  # Post-Nov cliff absorbed
 
 # Target: 1 if next 7-day return >5%, else 0
-df['target'] = (df['close'].pct_change(7).shift(-7) > 0.05).astype(int)
+df["target"] = (df["close"].pct_change(7).shift(-7) > 0.05).astype(int)
 
 # Drop NaNAs
 df = df.dropna()
 
 # Features for model
-X = df[['rsi', 'vol_change', 'macro_score', 'unlock_pressure']]
-y = df['target']
+X = df[["rsi", "vol_change", "macro_score", "unlock_pressure"]]
+y = df["target"]
 
 # Train-test split
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
 
 # XGBoost model
 model = XGBClassifier(
-    n_estimators=200,
-    max_depth=4,
-    learning_rate=0.05,
-    subsample=0.8,
-    random_state=42
+    n_estimators=200, max_depth=4, learning_rate=0.05, subsample=0.8, random_state=42
 )
 model.fit(X_train, y_train)
 
@@ -200,21 +214,18 @@ df_test = df.loc[X_test.index].copy()
 
 # Run comprehensive backtest
 backtest_results = backtest_strategy(
-    df_test,
-    model,
-    initial_capital=10000,
-    position_size_pct=0.1,
-    trading_fee_bps=5
+    df_test, model, initial_capital=10000, position_size_pct=0.1, trading_fee_bps=5
 )
 
 # Print backtest results
-print("\n" + "="*50)
+print("\n" + "=" * 50)
 print("BACKTEST RESULTS")
-print("="*50)
+print("=" * 50)
 print("Initial Capital: $10,000")
 print(f"Final Equity: ${backtest_results['final_equity']:.2f}")
 print(f"Total Return: {backtest_results['total_return_pct']:.2f}%")
-print(f"Total P&L: ${backtest_results['total_pnl']:.2f}")
+print(f"Total P&L (net): ${backtest_results['total_pnl']:.2f}")
+print(f"Total Fees Paid: ${backtest_results['total_fees']:.2f}")
 print()
 print(f"Number of Trades: {backtest_results['num_trades']}")
 print(f"Winning Trades: {backtest_results['winning_trades']}")
@@ -227,17 +238,21 @@ print(f"Profit Factor: {backtest_results['profit_factor']:.2f}x")
 print()
 print(f"Sharpe Ratio: {backtest_results['sharpe_ratio']:.2f}")
 print(f"Max Drawdown: {backtest_results['max_drawdown_pct']:.2f}%")
-print("="*50)
+print("=" * 50)
 print()
 
 
 # Current real-time prediction - use latest values from data
-current = pd.DataFrame([{
-    'rsi': df['rsi'].iloc[-1],
-    'vol_change': df['vol_change'].iloc[-1],
-    'macro_score': 0.6,      # Keep manual inputs if needed
-    'unlock_pressure': 0.15
-}])
+current = pd.DataFrame(
+    [
+        {
+            "rsi": df["rsi"].iloc[-1],
+            "vol_change": df["vol_change"].iloc[-1],
+            "macro_score": 0.6,  # Keep manual inputs if needed
+            "unlock_pressure": 0.15,
+        }
+    ]
+)
 
 prob_up = model.predict_proba(current)[0][1]
 print(f"Probability of >5% move up in next 1-4 weeks: {prob_up:.1%}")
