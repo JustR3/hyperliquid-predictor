@@ -123,7 +123,6 @@ def backtest_strategy(
         avg_loss = (
             trades_df[trades_df["net_pnl"] <= 0]["net_pnl"].mean() if losing_trades > 0 else 0
         )
-        closed_trades_pnl = trades_df["net_pnl"].sum()
         total_fees_paid = trades_df["fees"].sum()
         profit_factor = (
             abs(
@@ -134,7 +133,7 @@ def backtest_strategy(
             else float("inf")
         )
     else:
-        winning_trades = losing_trades = win_rate = avg_win = avg_loss = closed_trades_pnl = 0
+        winning_trades = losing_trades = win_rate = avg_win = avg_loss = 0
         total_fees_paid = 0
         profit_factor = 0
 
