@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 
@@ -10,32 +11,85 @@ from xgboost import XGBClassifier
 from risk_management import RiskManager, calculate_volatility, calculate_win_rate_and_ratio
 
 
-def load_hyperparameters(filepath="best_hyperparameters.json"):
+def get_default_hyperparameters(symbol):
     """
-    Load hyperparameters from JSON file if it exists.
+    Get smart default hyperparameters based on asset class.
 
     Args:
-        filepath: Path to the hyperparameters JSON file
+        symbol: Trading pair symbol (e.g., 'BTC/USDT')
 
     Returns:
-        Dictionary of hyperparameters, or default parameters if file doesn't exist
+        Dictionary of default hyperparameters
     """
-    if os.path.exists(filepath):
-        with open(filepath, "r") as f:
-            params = json.load(f)
-        print(f"✓ Loaded optimized hyperparameters from {filepath}")
-        return params
-    else:
-        print(f"⚠ No {filepath} found, using default hyperparameters")
+    # Major caps (BTC, ETH) - less volatile, more stable
+    if any(x in symbol.upper() for x in ["BTC", "ETH"]):
         return {
-            "n_estimators": 300,
-            "max_depth": 5,
+            "n_estimators": 200,
+            "max_depth": 4,
             "learning_rate": 0.03,
             "subsample": 0.8,
             "colsample_bytree": 0.8,
             "min_child_weight": 3,
             "gamma": 0,
         }
+    # Mid-caps (SOL, BNB, ADA, etc.) - medium volatility
+    elif any(x in symbol.upper() for x in ["SOL", "BNB", "ADA", "AVAX", "DOT"]):
+        return {
+            "n_estimators": 250,
+            "max_depth": 6,
+            "learning_rate": 0.08,
+            "subsample": 0.7,
+            "colsample_bytree": 0.7,
+            "min_child_weight": 2,
+            "gamma": 1,
+        }
+    # Low-caps - high volatility
+    else:
+        return {
+            "n_estimators": 300,
+            "max_depth": 9,
+            "learning_rate": 0.20,
+            "subsample": 0.6,
+            "colsample_bytree": 0.6,
+            "min_child_weight": 1,
+            "gamma": 2,
+        }
+
+
+def load_hyperparameters(symbol="HYPE/USDT"):
+    """
+    Load hyperparameters from symbol-specific JSON file if it exists.
+    Falls back to generic file, then to smart defaults.
+
+    Args:
+        symbol: Trading pair symbol (e.g., 'BTC/USDT')
+
+    Returns:
+        Dictionary of hyperparameters
+    """
+    # Try symbol-specific file first
+    safe_symbol = symbol.replace("/", "_")
+    symbol_filepath = f"best_hyperparameters_{safe_symbol}.json"
+
+    if os.path.exists(symbol_filepath):
+        with open(symbol_filepath, "r") as f:
+            params = json.load(f)
+        print(f"✓ Loaded {symbol} hyperparameters from {symbol_filepath}")
+        return params
+
+    # Fall back to generic file
+    generic_filepath = "best_hyperparameters.json"
+    if os.path.exists(generic_filepath):
+        with open(generic_filepath, "r") as f:
+            params = json.load(f)
+        print(f"⚠ Using generic hyperparameters from {generic_filepath}")
+        print(f"  (Run 'tune.py --symbol {symbol} --save' for optimized {symbol} parameters)")
+        return params
+
+    # Use smart defaults
+    print(f"⚠ No hyperparameter files found, using smart defaults for {symbol}")
+    print(f"  (Run 'tune.py --symbol {symbol} --trials 100 --save' to optimize)")
+    return get_default_hyperparameters(symbol)
 
 
 def compute_rsi(prices, period=14):
@@ -76,6 +130,7 @@ def compute_bollinger_bands(prices, period=20, num_std=2):
 def walk_forward_backtest(
     df,
     feature_columns,
+    symbol="HYPE/USDT",
     initial_capital=10000,
     trading_fee_bps=5,
     risk_manager=None,
@@ -88,6 +143,7 @@ def walk_forward_backtest(
     Args:
         df: Full dataframe with features and target
         feature_columns: List of feature column names
+        symbol: Trading pair symbol for loading hyperparameters
         initial_capital: Starting capital in USD
         trading_fee_bps: Trading fee in basis points
         risk_manager: RiskManager instance
@@ -136,7 +192,7 @@ def walk_forward_backtest(
             y_train = df.loc[train_start : train_end - 1, "target"]
 
             # Train new model with optimized hyperparameters
-            hyperparams = load_hyperparameters()
+            hyperparams = load_hyperparameters(symbol)
             hyperparams["random_state"] = 42  # Always use fixed seed for reproducibility
             model = XGBClassifier(**hyperparams)
             model.fit(X_train, y_train)
@@ -560,239 +616,317 @@ def backtest_strategy(
     }
 
 
-# Real-time HYPE/USDT data from Hyperliquid via CCXT
-exchange = ccxt.hyperliquid()
-ohlcv = exchange.fetch_ohlcv("HYPE/USDT", "1d", limit=200)
-df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
-df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+def main():
+    """Main application entry point."""
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description="Cryptocurrency price movement predictor using XGBoost and technical analysis"
+    )
+    parser.add_argument(
+        "--symbol",
+        type=str,
+        default="HYPE/USDT",
+        help="Trading pair symbol (e.g., BTC/USDT, ETH/USDT, SOL/USDT)",
+    )
+    parser.add_argument(
+        "--exchange",
+        type=str,
+        default="hyperliquid",
+        help="Exchange name (e.g., binance, coinbase, kraken, hyperliquid)",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=200,
+        help="Number of days of historical data to fetch (default: 200)",
+    )
 
-# Technical Indicators
-df["rsi"] = compute_rsi(df["close"], 14)
+    args = parser.parse_args()
 
-# MACD indicators
-macd_line, signal_line, macd_histogram = compute_macd(df["close"])
-df["macd"] = macd_line
-df["macd_signal"] = signal_line
-df["macd_histogram"] = macd_histogram
+    symbol = args.symbol
+    exchange_name = args.exchange.lower()
+    limit = args.limit
 
-# Bollinger Bands
-upper_band, lower_band, bb_position = compute_bollinger_bands(df["close"])
-df["bb_upper"] = upper_band
-df["bb_lower"] = lower_band
-df["bb_position"] = bb_position  # Where price is within the bands (0=lower, 1=upper)
+    print("\n" + "=" * 60)
+    print(f"CRYPTO PRICE PREDICTOR - {symbol}")
+    print("=" * 60)
+    print(f"Exchange: {exchange_name}")
+    print(f"Historical Data: {limit} days")
+    print("=" * 60)
+    print()
 
-# EMA indicators
-df["ema_9"] = compute_ema(df["close"], 9)
-df["ema_21"] = compute_ema(df["close"], 21)
-df["ema_50"] = compute_ema(df["close"], 50)
+    # Initialize exchange
+    try:
+        if exchange_name == "hyperliquid":
+            exchange = ccxt.hyperliquid()
+        elif exchange_name == "binance":
+            exchange = ccxt.binance()
+        elif exchange_name == "coinbase":
+            exchange = ccxt.coinbase()
+        elif exchange_name == "kraken":
+            exchange = ccxt.kraken()
+        elif exchange_name == "bybit":
+            exchange = ccxt.bybit()
+        elif exchange_name == "okx":
+            exchange = ccxt.okx()
+        else:
+            # Try to load exchange dynamically
+            exchange_class = getattr(ccxt, exchange_name)
+            exchange = exchange_class()
+    except AttributeError:
+        print(f"✗ Error: Exchange '{exchange_name}' not supported by CCXT")
+        print("   Available exchanges: binance, coinbase, kraken, bybit, okx, hyperliquid")
+        return
+    except Exception as e:
+        print(f"❌ Error initializing exchange: {e}")
+        return
 
-# Price relative to EMAs (momentum indicators)
-df["price_above_ema9"] = (df["close"] > df["ema_9"]).astype(int)
-df["price_above_ema21"] = (df["close"] > df["ema_21"]).astype(int)
-df["price_above_ema50"] = (df["close"] > df["ema_50"]).astype(int)
+    # Fetch data
+    print(f"Fetching {symbol} data from {exchange_name}...")
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, "1d", limit=limit)
+        if len(ohlcv) < 50:
+            print(f"❌ Error: Insufficient data. Got {len(ohlcv)} days, need at least 50")
+            return
+        print(f"✓ Fetched {len(ohlcv)} days of data")
+    except Exception as e:
+        print(f"❌ Error fetching data: {e}")
+        print(f"   Symbol '{symbol}' may not be available on {exchange_name}")
+        return
 
-# Volume analysis
-df["vol_change"] = df["volume"].pct_change().fillna(0)
-df["vol_sma_ratio"] = df["volume"] / df["volume"].rolling(window=20).mean()  # Volume vs average
+    df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    print()
 
-# Price momentum
-df["price_change"] = df["close"].pct_change().shift(-1)  # Next day return
-df["price_momentum_5d"] = df["close"].pct_change(5)  # 5-day momentum
+    # Technical Indicators
+    df["rsi"] = compute_rsi(df["close"], 14)
 
-# Manual inputs (updated Dec 7, 2025)
-df["macro_score"] = 0.6  # Fed paused, inflation sticky
-df["unlock_pressure"] = 0.15  # Post-Nov cliff absorbed
+    # MACD indicators
+    macd_line, signal_line, macd_histogram = compute_macd(df["close"])
+    df["macd"] = macd_line
+    df["macd_signal"] = signal_line
+    df["macd_histogram"] = macd_histogram
 
-# Target: 1 if next 7-day return >5%, else 0
-df["target"] = (df["close"].pct_change(7).shift(-7) > 0.05).astype(int)
+    # Bollinger Bands
+    upper_band, lower_band, bb_position = compute_bollinger_bands(df["close"])
+    df["bb_upper"] = upper_band
+    df["bb_lower"] = lower_band
+    df["bb_position"] = bb_position  # Where price is within the bands (0=lower, 1=upper)
 
-# Drop NaNAs
-df = df.dropna()
+    # EMA indicators
+    df["ema_9"] = compute_ema(df["close"], 9)
+    df["ema_21"] = compute_ema(df["close"], 21)
+    df["ema_50"] = compute_ema(df["close"], 50)
 
-# Features for model
-feature_columns = [
-    "rsi",
-    "macd",
-    "macd_histogram",
-    "bb_position",
-    "price_above_ema9",
-    "price_above_ema21",
-    "price_above_ema50",
-    "vol_change",
-    "vol_sma_ratio",
-    "price_momentum_5d",
-    "macro_score",
-    "unlock_pressure",
-]
-X = df[feature_columns]
-y = df["target"]
+    # Price relative to EMAs (momentum indicators)
+    df["price_above_ema9"] = (df["close"] > df["ema_9"]).astype(int)
+    df["price_above_ema21"] = (df["close"] > df["ema_21"]).astype(int)
+    df["price_above_ema50"] = (df["close"] > df["ema_50"]).astype(int)
 
-# Train-test split
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+    # Volume analysis
+    df["vol_change"] = df["volume"].pct_change().fillna(0)
+    df["vol_sma_ratio"] = df["volume"] / df["volume"].rolling(window=20).mean()  # Volume vs average
 
-# Load optimized hyperparameters from tune.py results
-hyperparams = load_hyperparameters()
-hyperparams["random_state"] = 42  # Always use fixed seed for reproducibility
+    # Price momentum
+    df["price_change"] = df["close"].pct_change().shift(-1)  # Next day return
+    df["price_momentum_5d"] = df["close"].pct_change(5)  # 5-day momentum
 
-print("\nUsing hyperparameters:")
-for key, value in hyperparams.items():
-    print(f"  {key}: {value}")
-print()
+    # Manual inputs (updated Dec 7, 2025)
+    df["macro_score"] = 0.6  # Fed paused, inflation sticky
+    df["unlock_pressure"] = 0.15  # Post-Nov cliff absorbed
 
-# XGBoost model with optimized hyperparameters
-model = XGBClassifier(**hyperparams)
-model.fit(X_train, y_train)
+    # Target: 1 if next 7-day return >5%, else 0
+    df["target"] = (df["close"].pct_change(7).shift(-7) > 0.05).astype(int)
 
-# Get test data with original indices preserved
-X_test_with_idx = X_test.copy()
-y_test_with_idx = y_test.copy()
-df_test = df.loc[X_test.index].copy()
+    # Drop NaNAs
+    df = df.dropna()
 
-# Feature importance analysis
-feature_importance = pd.DataFrame(
-    {"feature": feature_columns, "importance": model.feature_importances_}
-).sort_values("importance", ascending=False)
-
-# Run comprehensive backtest with risk management
-risk_manager = RiskManager(
-    max_drawdown_pct=0.15,  # 15% max drawdown
-    max_position_size_pct=0.20,  # 20% of capital per trade
-    stop_loss_pct=0.03,  # 3% stop loss
-    take_profit_pct=0.08,  # 8% take profit
-    kelly_fraction=0.3,  # Use 30% of Kelly for moderate risk
-)
-
-# Standard backtest (train once)
-backtest_results = backtest_strategy(
-    df_test, model, initial_capital=10000, trading_fee_bps=5, risk_manager=risk_manager
-)
-
-# Walk-forward backtest (retrain periodically)
-risk_manager_wf = RiskManager(
-    max_drawdown_pct=0.15,
-    max_position_size_pct=0.20,
-    stop_loss_pct=0.03,
-    take_profit_pct=0.08,
-    kelly_fraction=0.3,
-)
-
-walkforward_results = walk_forward_backtest(
-    df,
-    feature_columns,
-    initial_capital=10000,
-    trading_fee_bps=5,
-    risk_manager=risk_manager_wf,
-    train_window=80,  # 80 days training (shorter for more test data)
-    retrain_frequency=20,  # Retrain every 20 days
-)
-
-# Print standard backtest results
-print("\n" + "=" * 50)
-print("STANDARD BACKTEST (Train Once)")
-print("=" * 50)
-print("Initial Capital: $10,000")
-print(f"Final Equity: ${backtest_results['final_equity']:.2f}")
-print(f"Total Return: {backtest_results['total_return_pct']:.2f}%")
-print(f"Total P&L (net): ${backtest_results['total_pnl']:.2f}")
-print(f"Total Fees Paid: ${backtest_results['total_fees']:.2f}")
-print()
-print(f"Number of Trades: {backtest_results['num_trades']}")
-print(f"Winning Trades: {backtest_results['winning_trades']}")
-print(f"Losing Trades: {backtest_results['losing_trades']}")
-print(f"Win Rate: {backtest_results['win_rate_pct']:.1f}%")
-print()
-print(f"Avg Win: ${backtest_results['avg_win']:.2f}")
-print(f"Avg Loss: ${backtest_results['avg_loss']:.2f}")
-print(f"Profit Factor: {backtest_results['profit_factor']:.2f}x")
-print()
-print(f"Sharpe Ratio: {backtest_results['sharpe_ratio']:.2f}")
-print(f"Max Drawdown: {backtest_results['max_drawdown_pct']:.2f}%")
-print("=" * 50)
-
-# Print walk-forward backtest results
-print("\n" + "=" * 50)
-print("WALK-FORWARD BACKTEST (Retrain Every 20 Days)")
-print("=" * 50)
-print("Initial Capital: $10,000")
-print(f"Final Equity: ${walkforward_results['final_equity']:.2f}")
-print(f"Total Return: {walkforward_results['total_return_pct']:.2f}%")
-print(f"Total P&L (net): ${walkforward_results['total_pnl']:.2f}")
-print(f"Total Fees Paid: ${walkforward_results['total_fees']:.2f}")
-print(f"Model Retrains: {walkforward_results['retrains']}")
-print()
-print(f"Number of Trades: {walkforward_results['num_trades']}")
-print(f"Winning Trades: {walkforward_results['winning_trades']}")
-print(f"Losing Trades: {walkforward_results['losing_trades']}")
-print(f"Win Rate: {walkforward_results['win_rate_pct']:.1f}%")
-print()
-print(f"Avg Win: ${walkforward_results['avg_win']:.2f}")
-print(f"Avg Loss: ${walkforward_results['avg_loss']:.2f}")
-print(f"Profit Factor: {walkforward_results['profit_factor']:.2f}x")
-print()
-print(f"Sharpe Ratio: {walkforward_results['sharpe_ratio']:.2f}")
-print(f"Max Drawdown: {walkforward_results['max_drawdown_pct']:.2f}%")
-print("=" * 50)
-
-# Comparison summary
-print("\n" + "=" * 50)
-print("BACKTEST COMPARISON")
-print("=" * 50)
-return_diff = walkforward_results["total_return_pct"] - backtest_results["total_return_pct"]
-trades_diff = walkforward_results["num_trades"] - backtest_results["num_trades"]
-print(f"Return Difference: {return_diff:+.2f}% (Walk-Forward vs Standard)")
-print(f"Trade Count Difference: {trades_diff:+d} trades")
-print()
-if walkforward_results["total_return_pct"] > backtest_results["total_return_pct"]:
-    print("✓ Walk-Forward performed BETTER (more realistic)")
-elif walkforward_results["total_return_pct"] < backtest_results["total_return_pct"]:
-    print("⚠ Walk-Forward performed WORSE (more realistic, less overfitting)")
-else:
-    print("= Similar performance between methods")
-print()
-print("Note: Walk-forward testing is more realistic as it simulates")
-print("periodic model retraining that would occur in live trading.")
-print("=" * 50)
-
-# Print risk management metrics
-risk_metrics = risk_manager.get_risk_metrics()
-print("\nRISK MANAGEMENT METRICS")
-print("=" * 50)
-print(f"Max Drawdown Limit: {risk_metrics['max_drawdown_limit'] * 100:.1f}%")
-print(f"Current Drawdown: {risk_metrics['current_drawdown'] * 100:.2f}%")
-print(f"Max Position Size: {risk_metrics['max_position_size_pct'] * 100:.1f}% of capital")
-print(f"Stop Loss: {risk_metrics['stop_loss_pct'] * 100:.1f}%")
-print(f"Take Profit: {risk_metrics['take_profit_pct'] * 100:.1f}%")
-print(f"Kelly Fraction: {risk_metrics['kelly_fraction'] * 100:.1f}%")
-print(f"Trading Enabled: {risk_metrics['trading_enabled']}")
-print("=" * 50)
-
-# Print feature importance
-print("\nFEATURE IMPORTANCE (Top 5)")
-print("=" * 50)
-for idx, row in feature_importance.head(5).iterrows():
-    print(f"{row['feature']}: {row['importance']:.4f}")
-print("=" * 50)
-
-
-# Current real-time prediction - use latest values from data
-current = pd.DataFrame(
-    [
-        {
-            "rsi": df["rsi"].iloc[-1],
-            "macd": df["macd"].iloc[-1],
-            "macd_histogram": df["macd_histogram"].iloc[-1],
-            "bb_position": df["bb_position"].iloc[-1],
-            "price_above_ema9": df["price_above_ema9"].iloc[-1],
-            "price_above_ema21": df["price_above_ema21"].iloc[-1],
-            "price_above_ema50": df["price_above_ema50"].iloc[-1],
-            "vol_change": df["vol_change"].iloc[-1],
-            "vol_sma_ratio": df["vol_sma_ratio"].iloc[-1],
-            "price_momentum_5d": df["price_momentum_5d"].iloc[-1],
-            "macro_score": 0.6,
-            "unlock_pressure": 0.15,
-        }
+    # Features for model
+    feature_columns = [
+        "rsi",
+        "macd",
+        "macd_histogram",
+        "bb_position",
+        "price_above_ema9",
+        "price_above_ema21",
+        "price_above_ema50",
+        "vol_change",
+        "vol_sma_ratio",
+        "price_momentum_5d",
+        "macro_score",
+        "unlock_pressure",
     ]
-)
+    X = df[feature_columns]
+    y = df["target"]
 
-prob_up = model.predict_proba(current)[0][1]
-print(f"Probability of >5% move up in next 1-4 weeks: {prob_up:.1%}")
+    # Train-test split
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+
+    # Load optimized hyperparameters from tune.py results
+    hyperparams = load_hyperparameters(symbol)
+    hyperparams["random_state"] = 42  # Always use fixed seed for reproducibility
+
+    print("\nUsing hyperparameters:")
+    for key, value in hyperparams.items():
+        print(f"  {key}: {value}")
+    print()
+
+    # XGBoost model with optimized hyperparameters
+    model = XGBClassifier(**hyperparams)
+    model.fit(X_train, y_train)
+
+    # Get test data with original indices preserved
+    df_test = df.loc[X_test.index].copy()
+
+    # Feature importance analysis
+    feature_importance = pd.DataFrame(
+        {"feature": feature_columns, "importance": model.feature_importances_}
+    ).sort_values("importance", ascending=False)
+
+    # Run comprehensive backtest with risk management
+    risk_manager = RiskManager(
+        max_drawdown_pct=0.15,  # 15% max drawdown
+        max_position_size_pct=0.20,  # 20% of capital per trade
+        stop_loss_pct=0.03,  # 3% stop loss
+        take_profit_pct=0.08,  # 8% take profit
+        kelly_fraction=0.3,  # Use 30% of Kelly for moderate risk
+    )
+
+    # Standard backtest (train once)
+    backtest_results = backtest_strategy(
+        df_test, model, initial_capital=10000, trading_fee_bps=5, risk_manager=risk_manager
+    )
+
+    # Walk-forward backtest (retrain periodically)
+    risk_manager_wf = RiskManager(
+        max_drawdown_pct=0.15,
+        max_position_size_pct=0.20,
+        stop_loss_pct=0.03,
+        take_profit_pct=0.08,
+        kelly_fraction=0.3,
+    )
+
+    walkforward_results = walk_forward_backtest(
+        df,
+        feature_columns,
+        symbol=symbol,
+        initial_capital=10000,
+        trading_fee_bps=5,
+        risk_manager=risk_manager_wf,
+        train_window=80,  # 80 days training (shorter for more test data)
+        retrain_frequency=20,  # Retrain every 20 days
+    )
+
+    # Print standard backtest results
+    print("\n" + "=" * 50)
+    print("STANDARD BACKTEST (Train Once)")
+    print("=" * 50)
+    print("Initial Capital: $10,000")
+    print(f"Final Equity: ${backtest_results['final_equity']:.2f}")
+    print(f"Total Return: {backtest_results['total_return_pct']:.2f}%")
+    print(f"Total P&L (net): ${backtest_results['total_pnl']:.2f}")
+    print(f"Total Fees Paid: ${backtest_results['total_fees']:.2f}")
+    print()
+    print(f"Number of Trades: {backtest_results['num_trades']}")
+    print(f"Winning Trades: {backtest_results['winning_trades']}")
+    print(f"Losing Trades: {backtest_results['losing_trades']}")
+    print(f"Win Rate: {backtest_results['win_rate_pct']:.1f}%")
+    print()
+    print(f"Avg Win: ${backtest_results['avg_win']:.2f}")
+    print(f"Avg Loss: ${backtest_results['avg_loss']:.2f}")
+    print(f"Profit Factor: {backtest_results['profit_factor']:.2f}x")
+    print()
+    print(f"Sharpe Ratio: {backtest_results['sharpe_ratio']:.2f}")
+    print(f"Max Drawdown: {backtest_results['max_drawdown_pct']:.2f}%")
+    print("=" * 50)
+
+    # Print walk-forward backtest results
+    print("\n" + "=" * 50)
+    print("WALK-FORWARD BACKTEST (Retrain Every 20 Days)")
+    print("=" * 50)
+    print("Initial Capital: $10,000")
+    print(f"Final Equity: ${walkforward_results['final_equity']:.2f}")
+    print(f"Total Return: {walkforward_results['total_return_pct']:.2f}%")
+    print(f"Total P&L (net): ${walkforward_results['total_pnl']:.2f}")
+    print(f"Total Fees Paid: ${walkforward_results['total_fees']:.2f}")
+    print(f"Model Retrains: {walkforward_results['retrains']}")
+    print()
+    print(f"Number of Trades: {walkforward_results['num_trades']}")
+    print(f"Winning Trades: {walkforward_results['winning_trades']}")
+    print(f"Losing Trades: {walkforward_results['losing_trades']}")
+    print(f"Win Rate: {walkforward_results['win_rate_pct']:.1f}%")
+    print()
+    print(f"Avg Win: ${walkforward_results['avg_win']:.2f}")
+    print(f"Avg Loss: ${walkforward_results['avg_loss']:.2f}")
+    print(f"Profit Factor: {walkforward_results['profit_factor']:.2f}x")
+    print()
+    print(f"Sharpe Ratio: {walkforward_results['sharpe_ratio']:.2f}")
+    print(f"Max Drawdown: {walkforward_results['max_drawdown_pct']:.2f}%")
+    print("=" * 50)
+
+    # Comparison summary
+    print("\n" + "=" * 50)
+    print("BACKTEST COMPARISON")
+    print("=" * 50)
+    return_diff = walkforward_results["total_return_pct"] - backtest_results["total_return_pct"]
+    trades_diff = walkforward_results["num_trades"] - backtest_results["num_trades"]
+    print(f"Return Difference: {return_diff:+.2f}% (Walk-Forward vs Standard)")
+    print(f"Trade Count Difference: {trades_diff:+d} trades")
+    print()
+    if walkforward_results["total_return_pct"] > backtest_results["total_return_pct"]:
+        print("✓ Walk-Forward performed BETTER (more realistic)")
+    elif walkforward_results["total_return_pct"] < backtest_results["total_return_pct"]:
+        print("⚠ Walk-Forward performed WORSE (more realistic, less overfitting)")
+    else:
+        print("= Similar performance between methods")
+    print()
+    print("Note: Walk-forward testing is more realistic as it simulates")
+    print("periodic model retraining that would occur in live trading.")
+    print("=" * 50)
+
+    # Print risk management metrics
+    risk_metrics = risk_manager.get_risk_metrics()
+    print("\nRISK MANAGEMENT METRICS")
+    print("=" * 50)
+    print(f"Max Drawdown Limit: {risk_metrics['max_drawdown_limit'] * 100:.1f}%")
+    print(f"Current Drawdown: {risk_metrics['current_drawdown'] * 100:.2f}%")
+    print(f"Max Position Size: {risk_metrics['max_position_size_pct'] * 100:.1f}% of capital")
+    print(f"Stop Loss: {risk_metrics['stop_loss_pct'] * 100:.1f}%")
+    print(f"Take Profit: {risk_metrics['take_profit_pct'] * 100:.1f}%")
+    print(f"Kelly Fraction: {risk_metrics['kelly_fraction'] * 100:.1f}%")
+    print(f"Trading Enabled: {risk_metrics['trading_enabled']}")
+    print("=" * 50)
+
+    # Print feature importance
+    print("\nFEATURE IMPORTANCE (Top 5)")
+    print("=" * 50)
+    for idx, row in feature_importance.head(5).iterrows():
+        print(f"{row['feature']}: {row['importance']:.4f}")
+    print("=" * 50)
+
+    # Current real-time prediction - use latest values from data
+    current = pd.DataFrame(
+        [
+            {
+                "rsi": df["rsi"].iloc[-1],
+                "macd": df["macd"].iloc[-1],
+                "macd_histogram": df["macd_histogram"].iloc[-1],
+                "bb_position": df["bb_position"].iloc[-1],
+                "price_above_ema9": df["price_above_ema9"].iloc[-1],
+                "price_above_ema21": df["price_above_ema21"].iloc[-1],
+                "price_above_ema50": df["price_above_ema50"].iloc[-1],
+                "vol_change": df["vol_change"].iloc[-1],
+                "vol_sma_ratio": df["vol_sma_ratio"].iloc[-1],
+                "price_momentum_5d": df["price_momentum_5d"].iloc[-1],
+                "macro_score": 0.6,
+                "unlock_pressure": 0.15,
+            }
+        ]
+    )
+
+    prob_up = model.predict_proba(current)[0][1]
+    print(f"\nProbability of >5% move up in next 1-4 weeks: {prob_up:.1%}\n")
+
+
+if __name__ == "__main__":
+    main()

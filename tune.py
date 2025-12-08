@@ -57,25 +57,73 @@ def compute_bollinger_bands(prices, period=20, num_std=2):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Tune XGBoost hyperparameters for HYPE/USDT prediction"
+        description="Tune XGBoost hyperparameters for cryptocurrency prediction"
     )
     parser.add_argument(
         "--trials", type=int, default=100, help="Number of optimization trials (default: 100)"
     )
     parser.add_argument("--folds", type=int, default=5, help="Number of CV folds (default: 5)")
     parser.add_argument("--save", action="store_true", help="Save best parameters to file")
+    parser.add_argument(
+        "--symbol",
+        type=str,
+        default="HYPE/USDT",
+        help="Trading pair symbol (e.g., BTC/USDT, ETH/USDT)",
+    )
+    parser.add_argument(
+        "--exchange",
+        type=str,
+        default="hyperliquid",
+        help="Exchange name (e.g., binance, coinbase, kraken)",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=200, help="Number of days of historical data (default: 200)"
+    )
 
     args = parser.parse_args()
 
+    symbol = args.symbol
+    exchange_name = args.exchange.lower()
+    limit = args.limit
+
     print("=" * 60)
-    print("XGBoost Hyperparameter Tuning for HYPE/USDT")
+    print(f"XGBoost Hyperparameter Tuning for {symbol}")
     print("=" * 60)
     print()
 
     # Fetch data
-    print("Fetching HYPE/USDT data from Hyperliquid...")
-    exchange = ccxt.hyperliquid()
-    ohlcv = exchange.fetch_ohlcv("HYPE/USDT", "1d", limit=200)
+    print(f"Fetching {symbol} data from {exchange_name}...")
+    try:
+        if exchange_name == "hyperliquid":
+            exchange = ccxt.hyperliquid()
+        elif exchange_name == "binance":
+            exchange = ccxt.binance()
+        elif exchange_name == "coinbase":
+            exchange = ccxt.coinbase()
+        elif exchange_name == "kraken":
+            exchange = ccxt.kraken()
+        elif exchange_name == "bybit":
+            exchange = ccxt.bybit()
+        elif exchange_name == "okx":
+            exchange = ccxt.okx()
+        else:
+            exchange_class = getattr(ccxt, exchange_name)
+            exchange = exchange_class()
+    except AttributeError:
+        print(f"Error: Exchange '{exchange_name}' not supported")
+        return
+    except Exception as e:
+        print(f"Error initializing exchange: {e}")
+        return
+
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, "1d", limit=limit)
+        if len(ohlcv) < 50:
+            print(f"Error: Insufficient data. Got {len(ohlcv)} days, need at least 50")
+            return
+    except Exception as e:
+        print(f"Error fetching data: {e}")
+        return
     df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
 
@@ -174,13 +222,15 @@ def main():
 
     # Save if requested
     if args.save:
-        filename = "best_hyperparameters.json"
+        safe_symbol = symbol.replace("/", "_")
+        filename = f"best_hyperparameters_{safe_symbol}.json"
         with open(filename, "w") as f:
             json.dump(best_params, f, indent=2)
         print(f"✓ Best parameters saved to {filename}")
+        print(f"  Optimized specifically for {symbol}")
         print()
-        print("To use these parameters in main.py, update the model creation section:")
-        print("  model = XGBClassifier(**best_params)")
+        print("To use these parameters, run:")
+        print(f"  uv run main.py --symbol {symbol} --exchange {exchange_name}")
         print()
 
     print("=" * 60)
