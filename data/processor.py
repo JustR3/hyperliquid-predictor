@@ -196,7 +196,7 @@ def add_funding_rate(df: pd.DataFrame, funding_df: pd.DataFrame) -> pd.DataFrame
     df = df.merge(funding_df, on="timestamp", how="left")
 
     # Forward fill missing values and fill remaining with 0
-    df["funding_rate"] = df["funding_rate"].fillna(method="ffill").fillna(0.0)
+    df["funding_rate"] = df["funding_rate"].ffill().fillna(0.0)
 
     return df
 

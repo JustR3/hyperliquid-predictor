@@ -11,6 +11,7 @@ import optuna
 from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
 from sklearn.model_selection import TimeSeriesSplit
+from sklearn.preprocessing import LabelEncoder
 from xgboost import XGBClassifier
 
 import config
@@ -24,6 +25,7 @@ def calculate_sharpe_ratio_cv(model, X, y, n_splits=5):
     Calculate Sharpe ratio via time series cross-validation.
 
     Simulates a simple long-only strategy based on predictions.
+    Labels: 0 = loss, 1 = neutral, 2 = profit
     """
     tscv = TimeSeriesSplit(n_splits=n_splits)
     sharpe_ratios = []
@@ -32,18 +34,33 @@ def calculate_sharpe_ratio_cv(model, X, y, n_splits=5):
         X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
         y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
-        model.fit(X_train, y_train)
-        predictions = model.predict(X_val)
+        # Check if training fold has at least 2 classes
+        unique_train_classes = np.unique(y_train)
+        if len(unique_train_classes) < 2:
+            continue  # Skip this fold
 
-        # Simple strategy: long when prediction is positive
+        # Use LabelEncoder to handle non-consecutive classes
+        le = LabelEncoder()
+        y_train_encoded = le.fit_transform(y_train)
+
+        # Fit model with encoded labels
+        model.fit(X_train, y_train_encoded)
+        predictions_encoded = model.predict(X_val)
+
+        # Decode predictions back to original labels
+        predictions = le.inverse_transform(predictions_encoded)
+
+        # Simple strategy: long when prediction is 2 (profit)
         strategy_returns = []
         for i, pred in enumerate(predictions):
-            if i < len(y_val) - 1:
+            if i < len(y_val):
                 actual_label = y_val.iloc[i]
                 # Simulate return based on prediction correctness
-                if pred == 1 and actual_label == 1:
+                # pred=2 (profit), actual=2 (profit) -> Win
+                if pred == 2 and actual_label == 2:
                     strategy_returns.append(0.02)  # Win
-                elif pred == 1 and actual_label == -1:
+                # pred=2 (profit), actual=0 (loss) -> Loss
+                elif pred == 2 and actual_label == 0:
                     strategy_returns.append(-0.01)  # Loss
                 else:
                     strategy_returns.append(0.0)  # No trade
@@ -69,14 +86,12 @@ def objective(trial, X_train, y_train, n_splits=5):
         "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
         "gamma": trial.suggest_float("gamma", 0, 5),
         "random_state": config.RANDOM_STATE,
-        "objective": "multi:softmax",
-        "num_class": 3,  # -1, 0, 1
     }
 
     model = XGBClassifier(**params)
     sharpe = calculate_sharpe_ratio_cv(model, X_train, y_train, n_splits)
 
-    return sharpe
+    return float(sharpe)
 
 
 def main():
@@ -112,10 +127,26 @@ def main():
     split_idx = int(len(df) * (1 - config.TEST_SIZE))
     X_train, y_train = X.iloc[:split_idx], y.iloc[:split_idx]
 
+    # Check class distribution
+    unique_classes = np.unique(y_train)
     print(f"Training set: {len(X_train)} samples")
-    print(f"Starting optimization ({args.trials} trials)...\n")
+    print(f"Class distribution: {dict(zip(*np.unique(y_train, return_counts=True)))}")
 
-    # Run optimization
+    # Validate we have at least 2 classes for meaningful training
+    if len(unique_classes) < 2:
+        print(f"❌ Error: Only {len(unique_classes)} class in training data.")
+        print("Need at least 2 classes for classification. Try:")
+        print("  - Increase --limit for more data")
+        print("  - Adjust barrier parameters in config.py")
+        return
+
+    # If missing middle class, XGBoost will handle it but warn user
+    if len(unique_classes) < 3:
+        missing_classes = set([0, 1, 2]) - set(unique_classes)
+        print(f"⚠ Warning: Missing classes {missing_classes} in training data")
+        print("Optimization will continue but results may be suboptimal.\n")
+
+    print(f"Starting optimization ({args.trials} trials)...\n")  # Run optimization
     sampler = TPESampler(seed=config.RANDOM_STATE)
     pruner = MedianPruner(n_warmup_steps=10)
     study = optuna.create_study(direction="maximize", sampler=sampler, pruner=pruner)
