@@ -22,8 +22,8 @@ A machine learning trading system using XGBoost with the **Triple Barrier Method
 
 ```bash
 # Clone and setup
-git clone https://github.com/JustR3/hyperliquid-predictor.git
-cd hyperliquid-predictor
+git clone https://github.com/JustR3/cryptocurrency-predictor.git
+cd cryptocurrency-predictor
 
 # Install UV package manager (if not installed)
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -173,7 +173,3 @@ Edit `config.py` to modify:
 ## 📝 License
 
 MIT License - see LICENSE file for details.
-
----
-
-**Star ⭐ this repo if you find it useful!**
