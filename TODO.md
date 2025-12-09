@@ -76,7 +76,7 @@
   - [x] Add `--mode` CLI argument to main.py, tune.py, feature_analysis.py
   - [x] Maintain backward compatibility with legacy config values
 
-### Phase 5: Feature Analysis & Optimization 🔄 IN PROGRESS
+### Phase 5: Feature Analysis & Optimization ✅ COMPLETED
 - [x] **Create feature analysis tool** (`feature_analysis.py`)
   - [x] Train full model and extract feature importance scores
   - [x] Rank features by contribution to predictions
@@ -85,19 +85,39 @@
   - [x] Generate recommendations for feature optimization
   - [x] Support all prediction modes (short/medium/long)
 
-- [ ] **Conduct comprehensive feature analysis**
-  - [ ] Run analysis on multiple symbols (BTC, ETH, SOL, + 5 more)
-  - [ ] Test across all 3 prediction modes (short, medium, long)
-  - [ ] Document consistent patterns in feature importance
-  - [ ] Identify features to remove (funding_rate confirmed useless)
-  - [ ] Create optimized FEATURE_COLUMNS configuration
+- [x] **Conduct comprehensive feature analysis**
+  - [x] Run analysis on multiple symbols (BTC, ETH, SOL, BNB, ADA, AVAX, MATIC, LINK)
+  - [x] Test across all 3 prediction modes (short, medium, long) - 24 total runs
+  - [x] Document consistent patterns in feature importance
+  - [x] Identify features to remove (funding_rate confirmed 0% across ALL runs)
+  - [x] Create optimized FEATURE_COLUMNS configuration
 
-- [ ] **Optimize feature set**
-  - [ ] Remove zero-contribution features (funding_rate)
-  - [ ] Test optimized feature sets via backtesting
-  - [ ] Compare Sharpe Ratios: All features vs Top 90% vs Top 80%
-  - [ ] Update config.py with final optimized FEATURE_COLUMNS
+- [x] **Optimize feature set**
+  - [x] Remove zero-contribution features (funding_rate)
+  - [x] Update config.py with optimized FEATURE_COLUMNS (15 features, down from 16)
+  - [ ] Test optimized feature set via backtesting
+  - [ ] Compare Sharpe Ratios: 16 features vs 15 features
   - [ ] Document performance improvements
+
+### Phase 6: Feature Set Performance Validation 🔄 IN PROGRESS
+- [ ] **Backtest with optimized features**
+  - [ ] Run backtest on BTC with 15 features (no funding_rate)
+  - [ ] Run backtest on ETH with 15 features
+  - [ ] Run backtest on SOL with 15 features
+  - [ ] Compare metrics to previous 16-feature results
+  - [ ] Verify Sharpe Ratio maintained or improved
+
+- [ ] **Test reduced feature sets**
+  - [ ] Test top 13 features (90% coverage)
+  - [ ] Test top 11 features (80% coverage)
+  - [ ] Compare performance across all configurations
+  - [ ] Document optimal feature count
+
+- [ ] **Final optimization**
+  - [ ] Select best-performing feature set
+  - [ ] Update config.py with final FEATURE_COLUMNS
+  - [ ] Re-run hyperparameter tuning with optimized features
+  - [ ] Document performance gains and lessons learned
 
 ## Future Enhancements (Post-Optimization)
 - [ ] Implement probabilistic targets (quantile regression)

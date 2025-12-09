@@ -134,7 +134,8 @@ OPTUNA_N_TRIALS = 100
 OPTUNA_N_FOLDS = 5
 OPTUNA_METRIC = "sharpe_ratio"  # Changed from accuracy to sharpe_ratio
 
-# Feature Columns
+# Feature Columns (Optimized based on comprehensive feature analysis)
+# Removed: funding_rate (0% importance across all symbols & modes)
 FEATURE_COLUMNS = [
     "rsi",
     "macd",
@@ -151,7 +152,6 @@ FEATURE_COLUMNS = [
     "price_momentum_5d",
     "price_momentum_7d",
     "btc_beta",
-    "funding_rate",
 ]
 
 
