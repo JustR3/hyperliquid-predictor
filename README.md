@@ -1,5 +1,9 @@
 # Cryptocurrency Price Predictor
 
+![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Status](https://img.shields.io/badge/status-Active%20Development-yellow)
+
 A machine learning-based trading strategy using XGBoost to predict cryptocurrency market movements with sophisticated risk management and realistic backtesting.
 
 ## Overview

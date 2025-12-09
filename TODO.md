@@ -1,5 +1,31 @@
 # Project Roadmap
 
+## ✅ Completed Features
+
+### Core System
+- [x] **Triple Barrier Method implementation** - Industry-standard labeling for realistic trade outcomes
+- [x] **Multi-exchange support** - Works with 100+ exchanges via CCXT (Binance, Coinbase, Kraken, Bybit, OKX, Hyperliquid)
+- [x] **XGBoost strategy** - Machine learning model with proper time-series handling
+- [x] **Volatility targeting** - Dynamic position sizing based on market volatility
+- [x] **Realistic cost modeling** - Trading fees (5 bps) + slippage (10 bps)
+- [x] **Sharpe Ratio optimization** - Hyperparameter tuning focuses on profitability, not just accuracy
+- [x] **Walk-forward backtesting** - Retrains model every 20 days to avoid overfitting
+- [x] **Risk management system** - Kelly Criterion + volatility targeting for position sizing
+- [x] **Feature engineering** - Technical indicators (RSI, MACD, BB, ATR, EMAs), BTC beta, funding rates
+- [x] **Symbol-specific hyperparameters** - Smart defaults based on asset class (major/mid/low caps)
+- [x] **Data caching** - Parquet storage for faster repeated analysis
+- [x] **CLI interface** - Simple command-line interface with flexible options
+- [x] **Type hints** - Full type annotation across all modules
+- [x] **Centralized configuration** - All settings in `config.py`
+
+### Documentation
+- [x] **Comprehensive README** - Installation, usage, methodology, project structure
+- [x] **MIT License** - Proper open-source licensing
+- [x] **Code documentation** - Docstrings following Google style
+- [x] **Project badges** - Python version, license, development status
+
+---
+
 ## Agentic Workflow - Refactoring Plan
 
 ### Phase 1: Audit Data Layer
